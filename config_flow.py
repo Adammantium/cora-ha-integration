@@ -92,33 +92,27 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         config_entry: config_entries.ConfigEntry,
     ) -> config_entries.OptionsFlow:
         """Create the options flow."""
-        return OptionsFlow(config_entry)
+        return OptionsFlow()
 
 
-# TODO: options currently not used
 class OptionsFlow(config_entries.OptionsFlow):
     """Cora config flow options handler."""
-
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Initialize options flow."""
-        #self._config_entry = config_entry
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Manage the options."""
         if user_input is not None:
-            self.hass.config_entries.async_update_entry(self.config_entry, data={CONF_URL: user_input[CONF_URL], CONF_USER: user_input[CONF_USER],CONF_PASS: user_input[CONF_PASS], CONF_NOTIFY_SERVICE: user_input.get(CONF_NOTIFY_SERVICE, "")})
             return self.async_create_entry(title="", data=user_input)
 
-        schema = cora_config_option_schema(self.config_entry.options)
+        schema = cora_config_option_schema({**self.config_entry.data, **self.config_entry.options})
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(schema),
         )
 
 
-def cora_config_option_schema(options: MappingProxyType[str, Any]) -> dict:
+def cora_config_option_schema(options: dict[str, Any]) -> dict:
     """Return a schema for Cora options."""
     if not options:
         options = DEFAULT_OPTIONS
@@ -130,12 +124,12 @@ def cora_config_option_schema(options: MappingProxyType[str, Any]) -> dict:
         ): str,
         vol.Optional(
             CONF_USER,
-            description={"suggested_value": ""},
+            description={"suggested_value": options.get(CONF_USER, "")},
             default="",
         ): str,
         vol.Optional(
             CONF_PASS,
-            description={"suggested_value": ""},
+            description={"suggested_value": options.get(CONF_PASS, "")},
             default="",
         ): str,
         vol.Optional(
