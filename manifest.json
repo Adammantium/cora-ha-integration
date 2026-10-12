@@ -1,0 +1,11 @@
+{
+  "domain": "cora",
+  "name": "Cora",
+  "codeowners": ["@jrush"],
+  "config_flow": true,
+  "dependencies": ["conversation"],
+  "documentation": "https://jimrush.net",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "version": "1.0.0"
+}
