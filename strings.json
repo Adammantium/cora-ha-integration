@@ -13,7 +13,7 @@
       }
     },
     "error": {
-	  "invalid_host": "[%key:common::config_flow::error::invalid_host%]",
+      "invalid_host": "[%key:common::config_flow::error::invalid_host%]",
       "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
       "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
       "unknown": "[%key:common::config_flow::error::unknown%]"
@@ -30,6 +30,13 @@
         },
         "description": "Enter your endpoint, user, and password.",
         "title": "Conversation Endpoint"
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "connection": {
+        "name": "Connection"
       }
     }
   }

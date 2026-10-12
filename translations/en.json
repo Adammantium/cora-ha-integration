@@ -1,51 +1,43 @@
 {
-    "config": {
-        "error": {
-            "invalid_host": "Invalid host url",
-            "cannot_connect": "Failed to connect",
-            "invalid_auth": "Invalid authentication",
-            "unknown": "Unexpected error"
+  "config": {
+    "step": {
+      "user": {
+        "data": {
+          "server_url": "Conversation Endpoint",
+          "user": "Endpoint Username",
+          "password": "Endpoint Password",
+          "notify_service": "Fallback notify service for timers (e.g. mobile_app_pixel_8)"
         },
-        "step": {
-            "user": {
-                "data": {
-                    "api_key": "API key"
-                }
-            }
-        }
+        "description": "Enter your endpoint, user, and password.",
+        "title": "Conversation Endpoint"
+      }
     },
-    "options": {
-        "step": {
-            "init": {
-                "data": {
-                    "max_tokens": "Maximum tokens to return in response",
-                    "model": "Completion Model",
-                    "prompt": "Prompt Template",
-                    "temperature": "Temperature",
-                    "top_p": "Top P"
-                }
-            }
-        }
-    },
-    "services": {
-        "generate_image": {
-            "description": "Turn a prompt into an image",
-            "fields": {
-                "config_entry": {
-                    "description": "The config entry to use for this service",
-                    "name": "Config Entry"
-                },
-                "prompt": {
-                    "description": "The text to turn into an image",
-                    "example": "A photo of a dog",
-                    "name": "Prompt"
-                },
-                "size": {
-                    "description": "The size of the image to generate",
-                    "name": "Size"
-                }
-            },
-            "name": "Generate image"
-        }
+    "error": {
+      "invalid_host": "Invalid hostname or IP address",
+      "cannot_connect": "Failed to connect",
+      "invalid_auth": "Invalid authentication",
+      "unknown": "Unexpected error"
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "server_url": "Conversation Endpoint",
+          "user": "Endpoint Username",
+          "password": "Endpoint Password",
+          "notify_service": "Fallback notify service for timers (e.g. mobile_app_pixel_8)"
+        },
+        "description": "Enter your endpoint, user, and password.",
+        "title": "Conversation Endpoint"
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "connection": {
+        "name": "Connection"
+      }
+    }
+  }
 }

@@ -55,13 +55,15 @@ class CoraAgent(conversation.AbstractConversationAgent):
             if not "speakResponse" in result:
                 _LOGGER.warning("Empty response, check password and username")
                 raise aiohttp.ClientError()
-        except aiohttp.ClientError:
+            self.auth.set_connected(True)
+        except (aiohttp.ClientError, TimeoutError):
             _LOGGER.warning("Unable to connect to endpoint " + url)
             result = {
                 "finish_reason": "error",
                 "speakResponse": "Sorry, unable to connect to endpoint. Check settings and try again."
             }
             self.auth.reset_token()
+            self.auth.set_connected(False)
         except json.decoder.JSONDecodeError as e:
             _LOGGER.warning(f"Something happened: {e}")
             _LOGGER.warning(f"Result: {result_req}")
@@ -70,6 +72,7 @@ class CoraAgent(conversation.AbstractConversationAgent):
                 "speakResponse": "Sorry, I didn't get a response from endpoint. Check your logs for possible issues."
             }
             self.auth.reset_token()
+            self.auth.set_connected(False)
 
         _LOGGER.info(f"Result %s", result)
 

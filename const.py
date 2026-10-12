@@ -1,10 +1,15 @@
 """Constants for the Cora integration."""
 
+from datetime import timedelta
+
 DOMAIN = "cora"
 CONF_URL = "server_url"
 CONF_USER = "user"
 CONF_PASS = "password"
 CONF_NOTIFY_SERVICE = "notify_service"
+
+# Tokens are valid for 1 hour, refresh well before they expire
+TOKEN_REFRESH_INTERVAL = timedelta(minutes=30)
 
 ACTION_SET_TIMER = "SET_TIMER"
 ACTION_SHOW_TIMER = "SHOW_TIMER"
