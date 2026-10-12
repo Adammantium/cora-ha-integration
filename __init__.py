@@ -18,7 +18,7 @@ from .const import (
     CONF_PASS,
     DOMAIN,
 )
-from .conversation import CoraAgent
+from .agent import CoraAgent
 
 _LOGGER = logging.getLogger(__name__)
 
