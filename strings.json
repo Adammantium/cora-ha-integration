@@ -6,7 +6,9 @@
           "server_url": "Conversation Endpoint",
           "user": "Endpoint Username",
           "password": "Endpoint Password",
-          "notify_service": "Fallback notify service for timers (e.g. mobile_app_pixel_8)"
+          "notify_service": "Fallback notify service for timers (e.g. mobile_app_pixel_8)",
+          "media_player": "Fallback media player for music (e.g. media_player.kitchen)",
+          "music_app": "Music app on the phone (package name, default YouTube Music)"
         },
         "description": "Enter your endpoint, user, and password.",
         "title": "Conversation Endpoint"
@@ -26,7 +28,9 @@
           "server_url": "Conversation Endpoint",
           "user": "Endpoint Username",
           "password": "Endpoint Password",
-          "notify_service": "Fallback notify service for timers (e.g. mobile_app_pixel_8)"
+          "notify_service": "Fallback notify service for timers (e.g. mobile_app_pixel_8)",
+          "media_player": "Fallback media player for music (e.g. media_player.kitchen)",
+          "music_app": "Music app on the phone (package name, default YouTube Music)"
         },
         "description": "Enter your endpoint, user, and password.",
         "title": "Conversation Endpoint"

@@ -7,6 +7,10 @@ CONF_URL = "server_url"
 CONF_USER = "user"
 CONF_PASS = "password"
 CONF_NOTIFY_SERVICE = "notify_service"
+CONF_MEDIA_PLAYER = "media_player"
+CONF_MUSIC_APP = "music_app"
+
+DEFAULT_MUSIC_APP = "com.google.android.apps.youtube.music"
 
 # Tokens are valid for 1 hour, refresh well before they expire
 TOKEN_REFRESH_INTERVAL = timedelta(minutes=30)
@@ -15,3 +19,7 @@ ACTION_SET_TIMER = "SET_TIMER"
 ACTION_SHOW_TIMER = "SHOW_TIMER"
 ACTION_REMOVE_TIMER = "REMOVE_TIMER"
 ACTION_OPEN_WEB = "OPEN_WEB"
+ACTION_PLAY_MUSIC = "PLAY_MUSIC"
+ACTION_PAUSE_MUSIC = "PAUSE_MUSIC"
+ACTION_STOP_MUSIC = "STOP_MUSIC"
+ACTION_PLAY_MUSIC_TRACK = "PLAY_MUSIC_TRACK"
