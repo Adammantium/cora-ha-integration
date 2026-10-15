@@ -19,6 +19,7 @@ from .const import (
     CONF_NOTIFY_SERVICE,
     CONF_MEDIA_PLAYER,
     CONF_MUSIC_APP,
+    CONF_DEFAULT_PLAYLIST,
     DEFAULT_MUSIC_APP,
     DOMAIN,
 )
@@ -33,6 +34,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Optional(CONF_NOTIFY_SERVICE): str,
         vol.Optional(CONF_MEDIA_PLAYER): str,
         vol.Optional(CONF_MUSIC_APP, default=DEFAULT_MUSIC_APP): str,
+        vol.Optional(CONF_DEFAULT_PLAYLIST): str,
     }
 )
 
@@ -44,6 +46,7 @@ DEFAULT_OPTIONS = types.MappingProxyType(
         CONF_NOTIFY_SERVICE: "",
         CONF_MEDIA_PLAYER: "",
         CONF_MUSIC_APP: DEFAULT_MUSIC_APP,
+        CONF_DEFAULT_PLAYLIST: "",
     }
 )
 
@@ -153,5 +156,10 @@ def cora_config_option_schema(options: dict[str, Any]) -> dict:
             CONF_MUSIC_APP,
             description={"suggested_value": options.get(CONF_MUSIC_APP, DEFAULT_MUSIC_APP)},
             default=DEFAULT_MUSIC_APP,
+        ): str,
+        vol.Optional(
+            CONF_DEFAULT_PLAYLIST,
+            description={"suggested_value": options.get(CONF_DEFAULT_PLAYLIST, "")},
+            default="",
         ): str,
     }

@@ -20,6 +20,7 @@ from .const import (
     ACTION_SET_TIMER,
     ACTION_SHOW_TIMER,
     ACTION_STOP_MUSIC,
+    CONF_DEFAULT_PLAYLIST,
     CONF_MEDIA_PLAYER,
     CONF_MUSIC_APP,
     CONF_NOTIFY_SERVICE,
@@ -29,6 +30,9 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 MUSIC_ASSISTANT_DOMAIN = "music_assistant"
+
+# Number of random tracks queued when nothing is playing and no playlist is set
+RANDOM_TRACK_COUNT = 50
 
 ActionHandler = Callable[
     [HomeAssistant, ConfigEntry, conversation.ConversationInput, list],
@@ -289,14 +293,134 @@ async def control_music(
         await call_media_player(hass, target_id, "media_player", f"media_{media_command}")
 
 
+def phone_music_is_active(hass: HomeAssistant, entry: ConfigEntry, device_id: str | None) -> bool:
+    """Check the companion app media session sensor for a session of the music app.
+
+    Returns True if the state is unknown, so we fall back to resuming.
+    """
+    if not device_id:
+        return True
+
+    entity_reg = er.async_get(hass)
+    for e in er.async_entries_for_device(entity_reg, device_id):
+        if e.domain == "sensor" and e.unique_id.endswith("media_session"):
+            state = hass.states.get(e.entity_id)
+            if state is None:
+                return True
+            _LOGGER.debug(f"Media session sensor {e.entity_id}: {state.state} {state.attributes}")
+            playback_state = state.attributes.get(f"playback_state_{get_music_app(entry)}")
+            return str(playback_state).lower() in ("playing", "paused", "buffering")
+
+    _LOGGER.info("Enable the media session sensor in the companion app to detect if music is running")
+    return True
+
+
+def player_music_is_active(hass: HomeAssistant, entity_id: str) -> bool:
+    """Return True if the media player has something to resume."""
+    state = hass.states.get(entity_id)
+    return state is not None and state.state in ("playing", "paused", "buffering")
+
+
+async def play_random_tracks(hass: HomeAssistant, entity_id: str) -> None:
+    """Queue random tracks from the Music Assistant library."""
+    player = er.async_get(hass).async_get(entity_id)
+    if player is None or player.config_entry_id is None:
+        return
+
+    # https://www.home-assistant.io/integrations/music_assistant/#action-music_assistantget_library
+    try:
+        response = await hass.services.async_call(
+            MUSIC_ASSISTANT_DOMAIN,
+            "get_library",
+            {
+                "config_entry_id": player.config_entry_id,
+                "media_type": "track",
+                "order_by": "random",
+                "limit": RANDOM_TRACK_COUNT,
+            },
+            blocking=True,
+            return_response=True,
+        )
+    except Exception as e:  # pylint: disable=broad-except
+        _LOGGER.warning(f"Failed to get random tracks from Music Assistant: {e}")
+        return
+
+    uris = [item["uri"] for item in (response or {}).get("items", []) if item.get("uri")]
+    if not uris:
+        _LOGGER.warning("Music Assistant library returned no tracks")
+        return
+
+    await call_media_player(hass, entity_id, MUSIC_ASSISTANT_DOMAIN, "play_media", {
+        "media_id": uris,
+        "media_type": "track",
+        "enqueue": "replace",
+    })
+
+
 async def play_music(
     hass: HomeAssistant,
     entry: ConfigEntry,
     user_input: conversation.ConversationInput,
     parameters: list,
 ) -> None:
-    """Resume playback."""
-    await control_music(hass, entry, user_input, "play")
+    """Play music, parameters are [playlist (optional)].
+
+    With a playlist it is always started. Without one, paused music is resumed,
+    otherwise the default playlist or random tracks are played.
+    """
+    playlist = str(parameters[0]).strip() if parameters else ""
+
+    target = get_music_target(hass, entry, user_input.device_id)
+    if target is None:
+        _LOGGER.warning(f"No phone or media player found for device {user_input.device_id}, can not play music")
+        return
+    kind, target_id = target
+
+    if not playlist:
+        if kind == "phone":
+            # Only a phone that sent the request has a known device for the media session sensor
+            device_id = user_input.device_id if get_device_notify_service(hass, user_input.device_id) else None
+            active = phone_music_is_active(hass, entry, device_id)
+        else:
+            active = player_music_is_active(hass, target_id)
+        if active:
+            await control_music(hass, entry, user_input, "play")
+            return
+        playlist = {**entry.data, **entry.options}.get(CONF_DEFAULT_PLAYLIST, "").strip()
+
+    if kind == "phone":
+        # https://developer.android.com/reference/android/provider/MediaStore#INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH
+        if playlist:
+            playlist = clean_extra(playlist)
+            extras = [
+                f"query:{playlist}",
+                "android.intent.extra.focus:vnd.android.cursor.item/playlist",
+                f"android.intent.extra.playlist:{playlist}",
+            ]
+        else:
+            # Unstructured search without a query lets the app pick some music
+            extras = ["android.intent.extra.focus:vnd.android.cursor.item/*"]
+        await send_phone_command(hass, target_id, "command_activity", {
+            "intent_action": "android.media.action.MEDIA_PLAY_FROM_SEARCH",
+            "intent_package_name": get_music_app(entry),
+            "intent_extras": ",".join(extras),
+        })
+        return
+
+    if not hass.services.has_service(MUSIC_ASSISTANT_DOMAIN, "play_media"):
+        # Without Music Assistant all we can do is resume
+        _LOGGER.warning("Music Assistant is not available, can not start a playlist or random music")
+        await control_music(hass, entry, user_input, "play")
+        return
+
+    if playlist:
+        await call_media_player(hass, target_id, MUSIC_ASSISTANT_DOMAIN, "play_media", {
+            "media_id": playlist,
+            "media_type": "playlist",
+            "enqueue": "replace",
+        })
+    else:
+        await play_random_tracks(hass, target_id)
 
 
 async def pause_music(

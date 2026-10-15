@@ -9,6 +9,7 @@ CONF_PASS = "password"
 CONF_NOTIFY_SERVICE = "notify_service"
 CONF_MEDIA_PLAYER = "media_player"
 CONF_MUSIC_APP = "music_app"
+CONF_DEFAULT_PLAYLIST = "default_playlist"
 
 DEFAULT_MUSIC_APP = "com.google.android.apps.youtube.music"
 
