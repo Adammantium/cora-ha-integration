@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 import logging
-import re
+from urllib.parse import quote
 
 from homeassistant.components import conversation
 from homeassistant.config_entries import ConfigEntry
@@ -12,12 +12,15 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util import slugify
 
 from .const import (
+    ACTION_DECREASE_VOLUME,
+    ACTION_INCREASE_VOLUME,
     ACTION_OPEN_WEB,
     ACTION_PAUSE_MUSIC,
     ACTION_PLAY_MUSIC,
     ACTION_PLAY_MUSIC_TRACK,
     ACTION_REMOVE_TIMER,
     ACTION_SET_TIMER,
+    ACTION_SET_VOLUME,
     ACTION_SHOW_TIMER,
     ACTION_STOP_MUSIC,
     CONF_DEFAULT_PLAYLIST,
@@ -33,6 +36,12 @@ MUSIC_ASSISTANT_DOMAIN = "music_assistant"
 
 # Number of random tracks queued when nothing is playing and no playlist is set
 RANDOM_TRACK_COUNT = 50
+
+# Volume change in percent for INCREASE_VOLUME and DECREASE_VOLUME
+DEFAULT_VOLUME_STEP = 10
+
+# Music stream maximum on stock Android, used if the volume sensor is not enabled
+DEFAULT_PHONE_MAX_VOLUME = 15
 
 ActionHandler = Callable[
     [HomeAssistant, ConfigEntry, conversation.ConversationInput, list],
@@ -250,9 +259,10 @@ def get_music_app(entry: ConfigEntry) -> str:
     return {**entry.data, **entry.options}.get(CONF_MUSIC_APP, "").strip() or DEFAULT_MUSIC_APP
 
 
-def clean_extra(value: str) -> str:
-    """Remove characters that break the companion app intent_extras format."""
-    return re.sub(r"[,:]", " ", value).strip()
+def string_extra(name: str, value: str) -> str:
+    """Format a string intent extra, urlencoded so commas and colons do not break the format."""
+    # https://companion.home-assistant.io/docs/notifications/notification-commands/#broadcast-intent
+    return f"{name}:{quote(value, safe='')}:String.urlencoded"
 
 
 async def call_media_player(hass: HomeAssistant, entity_id: str, domain: str, service: str, data: dict | None = None) -> None:
@@ -391,11 +401,10 @@ async def play_music(
     if kind == "phone":
         # https://developer.android.com/reference/android/provider/MediaStore#INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH
         if playlist:
-            playlist = clean_extra(playlist)
             extras = [
-                f"query:{playlist}",
+                string_extra("query", playlist),
                 "android.intent.extra.focus:vnd.android.cursor.item/playlist",
-                f"android.intent.extra.playlist:{playlist}",
+                string_extra("android.intent.extra.playlist", playlist),
             ]
         else:
             # Unstructured search without a query lets the app pick some music
@@ -464,15 +473,13 @@ async def play_music_track(
     kind, target_id = target
     if kind == "phone":
         # https://developer.android.com/reference/android/provider/MediaStore#INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH
-        track = clean_extra(track)
-        artist = clean_extra(artist)
         extras = [
-            f"query:{track} {artist}".strip(),
+            string_extra("query", f"{track} {artist}".strip()),
             "android.intent.extra.focus:vnd.android.cursor.item/audio",
-            f"android.intent.extra.title:{track}",
+            string_extra("android.intent.extra.title", track),
         ]
         if artist:
-            extras.append(f"android.intent.extra.artist:{artist}")
+            extras.append(string_extra("android.intent.extra.artist", artist))
         await send_phone_command(hass, target_id, "command_activity", {
             "intent_action": "android.media.action.MEDIA_PLAY_FROM_SEARCH",
             "intent_package_name": get_music_app(entry),
@@ -492,6 +499,126 @@ async def play_music_track(
     await call_media_player(hass, target_id, MUSIC_ASSISTANT_DOMAIN, "play_media", data)
 
 
+def get_phone_volume(hass: HomeAssistant, device_id: str | None) -> tuple[int, int, int] | None:
+    """Return (current, min, max) from the companion app music volume sensor."""
+    if not device_id:
+        return None
+
+    for e in er.async_entries_for_device(er.async_get(hass), device_id):
+        if e.domain == "sensor" and "volume" in e.unique_id and "music" in e.unique_id:
+            state = hass.states.get(e.entity_id)
+            if state is None:
+                return None
+            try:
+                return (
+                    int(float(state.state)),
+                    int(state.attributes.get("min", 0)),
+                    int(state.attributes["max"]),
+                )
+            except (KeyError, TypeError, ValueError):
+                _LOGGER.debug(f"Can not read volume sensor {e.entity_id}: {state.state} {state.attributes}")
+                return None
+    return None
+
+
+async def change_volume(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    user_input: conversation.ConversationInput,
+    percent: int | None = None,
+    step: int = 0,
+) -> None:
+    """Set the volume to percent, or change it by step percent."""
+    target = get_music_target(hass, entry, user_input.device_id)
+    if target is None:
+        _LOGGER.warning(f"No phone or media player found for device {user_input.device_id}, can not change volume")
+        return
+
+    kind, target_id = target
+    if kind == "phone":
+        device_id = user_input.device_id if get_device_notify_service(hass, user_input.device_id) else None
+        volume = get_phone_volume(hass, device_id)
+        if volume is None:
+            if percent is None:
+                _LOGGER.warning("Enable the music volume sensor in the companion app to change the volume relatively")
+                return
+            _LOGGER.info(f"Music volume sensor not found, assuming a maximum of {DEFAULT_PHONE_MAX_VOLUME}")
+            current, minimum, maximum = 0, 0, DEFAULT_PHONE_MAX_VOLUME
+        else:
+            current, minimum, maximum = volume
+
+        if percent is None:
+            # Move at least one step so small volume ranges still change
+            delta = round(step / 100 * (maximum - minimum)) or (1 if step > 0 else -1)
+            level = current + delta
+        else:
+            level = minimum + round(percent / 100 * (maximum - minimum))
+        level = max(minimum, min(maximum, level))
+
+        # https://companion.home-assistant.io/docs/notifications/notification-commands/#volume-level
+        await send_phone_command(hass, target_id, "command_volume_level", {
+            "media_stream": "music_stream",
+            "command": level,
+        })
+        return
+
+    if percent is None:
+        state = hass.states.get(target_id)
+        current = state.attributes.get("volume_level") if state else None
+        if current is None:
+            await call_media_player(hass, target_id, "media_player", "volume_up" if step > 0 else "volume_down")
+            return
+        level = current + step / 100
+    else:
+        level = percent / 100
+    await call_media_player(hass, target_id, "media_player", "volume_set", {
+        "volume_level": round(max(0.0, min(1.0, level)), 2),
+    })
+
+
+def get_volume_step(parameters: list) -> int:
+    """Return the volume step in percent, parameters are [step (optional)]."""
+    try:
+        return abs(int(float(parameters[0])))
+    except (IndexError, ValueError, TypeError):
+        return DEFAULT_VOLUME_STEP
+
+
+async def increase_volume(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    user_input: conversation.ConversationInput,
+    parameters: list,
+) -> None:
+    """Turn the volume up."""
+    await change_volume(hass, entry, user_input, step=get_volume_step(parameters))
+
+
+async def decrease_volume(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    user_input: conversation.ConversationInput,
+    parameters: list,
+) -> None:
+    """Turn the volume down."""
+    await change_volume(hass, entry, user_input, step=-get_volume_step(parameters))
+
+
+async def set_volume(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    user_input: conversation.ConversationInput,
+    parameters: list,
+) -> None:
+    """Set the volume, parameters[0] is the volume between 0 and 100."""
+    try:
+        percent = max(0, min(100, round(float(parameters[0]))))
+    except (IndexError, ValueError, TypeError):
+        _LOGGER.warning(f"Invalid SET_VOLUME parameters: {parameters}")
+        return
+    await change_volume(hass, entry, user_input, percent=percent)
+
+
 ACTIONS: dict[str, ActionHandler] = {
     ACTION_SET_TIMER: set_timer,
     ACTION_SHOW_TIMER: show_timer,
@@ -501,4 +628,7 @@ ACTIONS: dict[str, ActionHandler] = {
     ACTION_PAUSE_MUSIC: pause_music,
     ACTION_STOP_MUSIC: stop_music,
     ACTION_PLAY_MUSIC_TRACK: play_music_track,
+    ACTION_INCREASE_VOLUME: increase_volume,
+    ACTION_DECREASE_VOLUME: decrease_volume,
+    ACTION_SET_VOLUME: set_volume,
 }
