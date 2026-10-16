@@ -303,6 +303,13 @@ async def control_music(
         await call_media_player(hass, target_id, "media_player", f"media_{media_command}")
 
 
+def is_phone_sensor(entity: er.RegistryEntry, key: str) -> bool:
+    """Check if a registry entry is the companion app sensor with this key, e.g. sensor.<phone>_volume_level_music."""
+    return entity.domain == "sensor" and (
+        entity.unique_id.endswith(key) or entity.entity_id.endswith(f"_{key}")
+    )
+
+
 def phone_music_is_active(hass: HomeAssistant, entry: ConfigEntry, device_id: str | None) -> bool:
     """Check the companion app media session sensor for a session of the music app.
 
@@ -313,7 +320,7 @@ def phone_music_is_active(hass: HomeAssistant, entry: ConfigEntry, device_id: st
 
     entity_reg = er.async_get(hass)
     for e in er.async_entries_for_device(entity_reg, device_id):
-        if e.domain == "sensor" and e.unique_id.endswith("media_session"):
+        if is_phone_sensor(e, "media_session"):
             state = hass.states.get(e.entity_id)
             if state is None:
                 return True
@@ -505,7 +512,7 @@ def get_phone_volume(hass: HomeAssistant, device_id: str | None) -> tuple[int, i
         return None
 
     for e in er.async_entries_for_device(er.async_get(hass), device_id):
-        if e.domain == "sensor" and "volume" in e.unique_id and "music" in e.unique_id:
+        if is_phone_sensor(e, "volume_level_music"):
             state = hass.states.get(e.entity_id)
             if state is None:
                 return None
