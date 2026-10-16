@@ -1,7 +1,7 @@
 {
   "domain": "cora",
   "name": "Cora",
-  "codeowners": ["@jrush"],
+  "codeowners": ["@Adammantium"],
   "config_flow": true,
   "dependencies": ["conversation"],
   "documentation": "https://gitlab.devforce.de/CoraConnect/cora-homeassistant-integration",
