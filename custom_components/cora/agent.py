@@ -11,7 +11,7 @@ from homeassistant.components import conversation
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import MATCH_ALL
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import intent
+from homeassistant.helpers import area_registry as ar, device_registry as dr, intent
 
 from .actions import async_handle_action
 from .auth import CoraAuth, call_post_request
@@ -31,6 +31,19 @@ class CoraAgent(conversation.AbstractConversationAgent):
         _LOGGER.debug("configUser %s", auth.user)
         _LOGGER.debug("configPass %s", auth.password)
 
+    def get_device_info(self, device_id: str | None) -> tuple[str | None, str | None]:
+        """Return the name and room (area) of the device that sent the request."""
+        if not device_id:
+            return None, None
+        device = dr.async_get(self.hass).async_get(device_id)
+        if device is None:
+            return None, None
+
+        room = None
+        if device.area_id and (area := ar.async_get(self.hass).async_get_area(device.area_id)):
+            room = area.name
+        return device.name_by_user or device.name, room
+
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
         """Return a list of supported languages."""
@@ -43,7 +56,9 @@ class CoraAgent(conversation.AbstractConversationAgent):
 
         await self.auth.ensure_token()
 
-        content = {'message': user_input.text, 'speakerIdent': "", "sessionToken": self.auth.token, 'conversation_id': user_input.conversation_id, 'device_id': user_input.device_id, 'language': user_input.language, 'agent_id': user_input.agent_id, 'extra_system_prompt': user_input.extra_system_prompt}
+        device_name, room = self.get_device_info(user_input.device_id)
+
+        content = {'message': user_input.text, 'speakerIdent': "", "sessionToken": self.auth.token, 'conversation_id': user_input.conversation_id, 'device_id': user_input.device_id, 'device_name': device_name, 'room': room, 'language': user_input.language, 'agent_id': user_input.agent_id, 'extra_system_prompt': user_input.extra_system_prompt}
 
         _LOGGER.info("Content sent to endpoint %s", content)
         url = self.auth.url + "/SpeechServlet"
