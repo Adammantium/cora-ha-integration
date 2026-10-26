@@ -6,7 +6,9 @@ import logging
 from urllib.parse import quote
 
 from homeassistant.components import conversation
+from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import ATTR_SUPPORTED_FEATURES, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util import slugify
@@ -190,12 +192,35 @@ async def open_web(
     })
 
 
-def get_media_player(hass: HomeAssistant, entry: ConfigEntry, device_id: str | None) -> str | None:
-    """Find the media player for the device that sent the request.
+def player_can_play(
+    hass: HomeAssistant,
+    entity_id: str,
+    features: MediaPlayerEntityFeature,
+    music_assistant: bool,
+) -> bool:
+    """Check if a media player is available and supports what the action needs."""
+    state = hass.states.get(entity_id)
+    if state is None or state.state == STATE_UNAVAILABLE:
+        return False
+    if music_assistant:
+        entity = er.async_get(hass).async_get(entity_id)
+        if entity is None or entity.platform != MUSIC_ASSISTANT_DOMAIN:
+            return False
+    return state.attributes.get(ATTR_SUPPORTED_FEATURES, 0) & features == features
 
-    Prefers Music Assistant players on the device, then Music Assistant players
-    in the same area, then any media player on the device and finally the
-    media player configured for this integration.
+
+def get_media_player(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    device_id: str | None,
+    features: MediaPlayerEntityFeature,
+    music_assistant: bool = False,
+) -> str | None:
+    """Find a media player for the device that sent the request.
+
+    First players on the device itself, then speakers in the same room and
+    finally the media player configured for this integration. Within the device
+    and the room, Music Assistant players and players that are already playing win.
     """
     if device_id:
         entity_reg = er.async_get(hass)
@@ -206,39 +231,46 @@ def get_media_player(hass: HomeAssistant, entry: ConfigEntry, device_id: str | N
             if e.domain == "media_player" and not e.disabled
         ]
 
-        area_players: list[er.RegistryEntry] = []
+        room_players: list[er.RegistryEntry] = []
         device = device_reg.async_get(device_id)
         if device and device.area_id:
-            area_players = [
+            room_players = [
                 e for e in er.async_entries_for_area(entity_reg, device.area_id)
-                if e.domain == "media_player" and not e.disabled
+                if e.domain == "media_player" and not e.disabled and e.device_id != device_id
             ]
-            for area_device in dr.async_entries_for_area(device_reg, device.area_id):
-                area_players.extend(
-                    e for e in er.async_entries_for_device(entity_reg, area_device.id)
+            for room_device in dr.async_entries_for_area(device_reg, device.area_id):
+                if room_device.id == device_id:
+                    continue
+                room_players.extend(
+                    e for e in er.async_entries_for_device(entity_reg, room_device.id)
                     if e.domain == "media_player" and not e.disabled
                     # Entities with their own area belong to that area, not the device's
                     and (e.area_id is None or e.area_id == device.area_id)
                 )
 
-        candidates = (
-            [e for e in device_players if e.platform == MUSIC_ASSISTANT_DOMAIN]
-            + [e for e in area_players if e.platform == MUSIC_ASSISTANT_DOMAIN]
-            + device_players
-        )
-        for candidate in candidates:
-            if hass.states.get(candidate.entity_id) is not None:
-                return candidate.entity_id
+        def rank(entity: er.RegistryEntry) -> tuple[bool, bool]:
+            state = hass.states.get(entity.entity_id)
+            playing = state is not None and state.state in ("playing", "paused", "buffering")
+            return (entity.platform != MUSIC_ASSISTANT_DOMAIN, not playing)
+
+        for players in (device_players, room_players):
+            for candidate in sorted(players, key=rank):
+                if player_can_play(hass, candidate.entity_id, features, music_assistant):
+                    return candidate.entity_id
 
     # Fall back to the media player configured for this integration
     entity_id = {**entry.data, **entry.options}.get(CONF_MEDIA_PLAYER, "").strip()
-    if entity_id and hass.states.get(entity_id) is not None:
+    if entity_id and player_can_play(hass, entity_id, features, music_assistant):
         return entity_id
     return None
 
 
 def get_music_target(
-    hass: HomeAssistant, entry: ConfigEntry, device_id: str | None
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    device_id: str | None,
+    features: MediaPlayerEntityFeature = MediaPlayerEntityFeature(0),
+    music_assistant: bool = False,
 ) -> tuple[str, str] | None:
     """Decide where music actions go.
 
@@ -247,7 +279,7 @@ def get_music_target(
     """
     if service := get_device_notify_service(hass, device_id):
         return ("phone", service)
-    if entity_id := get_media_player(hass, entry, device_id):
+    if entity_id := get_media_player(hass, entry, device_id, features, music_assistant):
         return ("player", entity_id)
     if service := get_fallback_notify_service(hass, entry):
         return ("phone", service)
@@ -279,19 +311,15 @@ async def call_media_player(hass: HomeAssistant, entity_id: str, domain: str, se
         _LOGGER.warning(f"Failed to call {domain}.{service} on {entity_id}: {e}")
 
 
-async def control_music(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    user_input: conversation.ConversationInput,
-    media_command: str,
-) -> None:
-    """Send play, pause or stop to the phone music app or the media player."""
-    target = get_music_target(hass, entry, user_input.device_id)
-    if target is None:
-        _LOGGER.warning(f"No phone or media player found for device {user_input.device_id}, can not {media_command}")
-        return
+MEDIA_COMMAND_FEATURES = {
+    "play": MediaPlayerEntityFeature.PLAY,
+    "pause": MediaPlayerEntityFeature.PAUSE,
+    "stop": MediaPlayerEntityFeature.STOP,
+}
 
-    kind, target_id = target
+
+async def send_music_command(hass: HomeAssistant, entry: ConfigEntry, kind: str, target_id: str, media_command: str) -> None:
+    """Send play, pause or stop to the phone music app or a media player."""
     if kind == "phone":
         # Needs notification access for the companion app
         # https://companion.home-assistant.io/docs/notifications/notification-commands/#media
@@ -301,6 +329,21 @@ async def control_music(
         })
     else:
         await call_media_player(hass, target_id, "media_player", f"media_{media_command}")
+
+
+async def control_music(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    user_input: conversation.ConversationInput,
+    media_command: str,
+) -> None:
+    """Send play, pause or stop to the phone music app or the media player."""
+    target = get_music_target(hass, entry, user_input.device_id, MEDIA_COMMAND_FEATURES[media_command])
+    if target is None:
+        _LOGGER.warning(f"No phone or media player found for device {user_input.device_id}, can not {media_command}")
+        return
+
+    await send_music_command(hass, entry, *target, media_command)
 
 
 def is_phone_sensor(entity: er.RegistryEntry, key: str) -> bool:
@@ -387,23 +430,33 @@ async def play_music(
     """
     playlist = str(parameters[0]).strip() if parameters else ""
 
-    target = get_music_target(hass, entry, user_input.device_id)
+    resume_target = None
+    if not playlist:
+        resume_target = get_music_target(hass, entry, user_input.device_id, MediaPlayerEntityFeature.PLAY)
+        if resume_target is not None:
+            kind, target_id = resume_target
+            if kind == "phone":
+                # Only a phone that sent the request has a known device for the media session sensor
+                device_id = user_input.device_id if get_device_notify_service(hass, user_input.device_id) else None
+                active = phone_music_is_active(hass, entry, device_id)
+            else:
+                active = player_music_is_active(hass, target_id)
+            if active:
+                await send_music_command(hass, entry, kind, target_id, "play")
+                return
+        playlist = {**entry.data, **entry.options}.get(CONF_DEFAULT_PLAYLIST, "").strip()
+
+    # Starting new music needs the phone app or a Music Assistant player
+    target = get_music_target(hass, entry, user_input.device_id, MediaPlayerEntityFeature(0), music_assistant=True)
     if target is None:
-        _LOGGER.warning(f"No phone or media player found for device {user_input.device_id}, can not play music")
+        if resume_target is not None:
+            # Without Music Assistant all we can do is resume
+            _LOGGER.warning("No Music Assistant player found, can not start a playlist or random music")
+            await send_music_command(hass, entry, *resume_target, "play")
+        else:
+            _LOGGER.warning(f"No phone or media player found for device {user_input.device_id}, can not play music")
         return
     kind, target_id = target
-
-    if not playlist:
-        if kind == "phone":
-            # Only a phone that sent the request has a known device for the media session sensor
-            device_id = user_input.device_id if get_device_notify_service(hass, user_input.device_id) else None
-            active = phone_music_is_active(hass, entry, device_id)
-        else:
-            active = player_music_is_active(hass, target_id)
-        if active:
-            await control_music(hass, entry, user_input, "play")
-            return
-        playlist = {**entry.data, **entry.options}.get(CONF_DEFAULT_PLAYLIST, "").strip()
 
     if kind == "phone":
         # https://developer.android.com/reference/android/provider/MediaStore#INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH
@@ -421,12 +474,6 @@ async def play_music(
             "intent_package_name": get_music_app(entry),
             "intent_extras": ",".join(extras),
         })
-        return
-
-    if not hass.services.has_service(MUSIC_ASSISTANT_DOMAIN, "play_media"):
-        # Without Music Assistant all we can do is resume
-        _LOGGER.warning("Music Assistant is not available, can not start a playlist or random music")
-        await control_music(hass, entry, user_input, "play")
         return
 
     if playlist:
@@ -472,9 +519,9 @@ async def play_music_track(
         return
     artist = str(parameters[1]).strip() if len(parameters) > 1 else ""
 
-    target = get_music_target(hass, entry, user_input.device_id)
+    target = get_music_target(hass, entry, user_input.device_id, MediaPlayerEntityFeature(0), music_assistant=True)
     if target is None:
-        _LOGGER.warning(f"No phone or media player found for device {user_input.device_id}, can not play track")
+        _LOGGER.warning(f"No phone or Music Assistant player found for device {user_input.device_id}, can not play track")
         return
 
     kind, target_id = target
@@ -492,10 +539,6 @@ async def play_music_track(
             "intent_package_name": get_music_app(entry),
             "intent_extras": ",".join(extras),
         })
-        return
-
-    if not hass.services.has_service(MUSIC_ASSISTANT_DOMAIN, "play_media"):
-        _LOGGER.warning("Music Assistant is not available, can not play track")
         return
 
     data = {"media_id": track, "media_type": "track", "enqueue": "play"}
@@ -536,7 +579,7 @@ async def change_volume(
     step: int = 0,
 ) -> None:
     """Set the volume to percent, or change it by step percent."""
-    target = get_music_target(hass, entry, user_input.device_id)
+    target = get_music_target(hass, entry, user_input.device_id, MediaPlayerEntityFeature.VOLUME_SET)
     if target is None:
         _LOGGER.warning(f"No phone or media player found for device {user_input.device_id}, can not change volume")
         return
