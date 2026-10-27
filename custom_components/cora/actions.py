@@ -26,6 +26,7 @@ from .const import (
     ACTION_SET_TIMER,
     ACTION_SET_VOLUME,
     ACTION_SHOW_TIMER,
+    ACTION_STOP,
     ACTION_STOP_MUSIC,
     CONF_DEFAULT_PLAYLIST,
     CONF_MEDIA_PLAYER,
@@ -211,6 +212,38 @@ def player_can_play(
     return state.attributes.get(ATTR_SUPPORTED_FEATURES, 0) & features == features
 
 
+def get_nearby_players(
+    hass: HomeAssistant, device_id: str
+) -> tuple[list[er.RegistryEntry], list[er.RegistryEntry]]:
+    """Return the media players on the device and the ones in the device's room."""
+    entity_reg = er.async_get(hass)
+    device_reg = dr.async_get(hass)
+
+    device_players = [
+        e for e in er.async_entries_for_device(entity_reg, device_id)
+        if e.domain == "media_player" and not e.disabled
+    ]
+
+    room_players: list[er.RegistryEntry] = []
+    device = device_reg.async_get(device_id)
+    if device and device.area_id:
+        room_players = [
+            e for e in er.async_entries_for_area(entity_reg, device.area_id)
+            if e.domain == "media_player" and not e.disabled and e.device_id != device_id
+        ]
+        for room_device in dr.async_entries_for_area(device_reg, device.area_id):
+            if room_device.id == device_id:
+                continue
+            room_players.extend(
+                e for e in er.async_entries_for_device(entity_reg, room_device.id)
+                if e.domain == "media_player" and not e.disabled
+                # Entities with their own area belong to that area, not the device's
+                and (e.area_id is None or e.area_id == device.area_id)
+            )
+
+    return device_players, room_players
+
+
 def get_media_player(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -225,30 +258,7 @@ def get_media_player(
     and the room, Music Assistant players and players that are already playing win.
     """
     if device_id:
-        entity_reg = er.async_get(hass)
-        device_reg = dr.async_get(hass)
-
-        device_players = [
-            e for e in er.async_entries_for_device(entity_reg, device_id)
-            if e.domain == "media_player" and not e.disabled
-        ]
-
-        room_players: list[er.RegistryEntry] = []
-        device = device_reg.async_get(device_id)
-        if device and device.area_id:
-            room_players = [
-                e for e in er.async_entries_for_area(entity_reg, device.area_id)
-                if e.domain == "media_player" and not e.disabled and e.device_id != device_id
-            ]
-            for room_device in dr.async_entries_for_area(device_reg, device.area_id):
-                if room_device.id == device_id:
-                    continue
-                room_players.extend(
-                    e for e in er.async_entries_for_device(entity_reg, room_device.id)
-                    if e.domain == "media_player" and not e.disabled
-                    # Entities with their own area belong to that area, not the device's
-                    and (e.area_id is None or e.area_id == device.area_id)
-                )
+        device_players, room_players = get_nearby_players(hass, device_id)
 
         def rank(entity: er.RegistryEntry) -> tuple[bool, bool]:
             state = hass.states.get(entity.entity_id)
@@ -702,6 +712,44 @@ async def set_volume(
     await change_volume(hass, entry, user_input, percent=percent)
 
 
+async def stop(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    user_input: conversation.ConversationInput,
+    parameters: list,
+) -> None:
+    """Stop whatever is going on: expired timers and running music.
+
+    Ringing alarms are left alone, DISMISS_ALARM would skip the next alarm
+    if none is ringing and the companion app can not tell if one is.
+    """
+    # Expired timers on the phone, DISMISS_TIMER without a timer only affects expired ones
+    if get_notify_service(hass, entry, user_input.device_id):
+        await start_activity(hass, entry, user_input, {
+            "intent_action": "android.intent.action.DISMISS_TIMER",
+        })
+
+    # Music on the phone that sent the request, a stop without a session does nothing
+    if service := get_device_notify_service(hass, user_input.device_id):
+        await send_music_command(hass, entry, "phone", service, "stop")
+
+    # Music on the device, in its room or on the fallback player
+    players: list[str] = []
+    if user_input.device_id:
+        device_players, room_players = get_nearby_players(hass, user_input.device_id)
+        players = [e.entity_id for e in device_players + room_players]
+    fallback_player = {**entry.data, **entry.options}.get(CONF_MEDIA_PLAYER, "").strip()
+    if fallback_player and fallback_player not in players:
+        players.append(fallback_player)
+
+    for entity_id in players:
+        state = hass.states.get(entity_id)
+        if state is not None and state.state in ("playing", "buffering") and player_can_play(
+            hass, entity_id, MediaPlayerEntityFeature.STOP, music_assistant=False
+        ):
+            await call_media_player(hass, entity_id, "media_player", "media_stop")
+
+
 ACTIONS: dict[str, ActionHandler] = {
     ACTION_SET_TIMER: set_timer,
     ACTION_SHOW_TIMER: show_timer,
@@ -710,6 +758,7 @@ ACTIONS: dict[str, ActionHandler] = {
     ACTION_PLAY_MUSIC: play_music,
     ACTION_PAUSE_MUSIC: pause_music,
     ACTION_STOP_MUSIC: stop_music,
+    ACTION_STOP: stop,
     ACTION_NEXT_MUSIC_TRACK: next_music_track,
     ACTION_PREVIOUS_MUSIC_TRACK: previous_music_track,
     ACTION_PLAY_MUSIC_TRACK: play_music_track,

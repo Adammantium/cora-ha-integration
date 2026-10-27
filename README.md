@@ -44,6 +44,7 @@ The Cora server can return an `action` with `actionParameters` next to `speakRes
 | `SET_TIMER` | seconds |
 | `SHOW_TIMER` | – |
 | `REMOVE_TIMER` | – (dismisses a ringing timer) |
+| `STOP` | – (dismisses ringing timers and stops running music) |
 | `OPEN_WEB` | URL |
 | `PLAY_MUSIC` | playlist (optional) |
 | `PAUSE_MUSIC` / `STOP_MUSIC` | – |
