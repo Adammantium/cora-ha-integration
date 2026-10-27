@@ -16,10 +16,12 @@ from homeassistant.util import slugify
 from .const import (
     ACTION_DECREASE_VOLUME,
     ACTION_INCREASE_VOLUME,
+    ACTION_NEXT_MUSIC_TRACK,
     ACTION_OPEN_WEB,
     ACTION_PAUSE_MUSIC,
     ACTION_PLAY_MUSIC,
     ACTION_PLAY_MUSIC_TRACK,
+    ACTION_PREVIOUS_MUSIC_TRACK,
     ACTION_REMOVE_TIMER,
     ACTION_SET_TIMER,
     ACTION_SET_VOLUME,
@@ -315,6 +317,17 @@ MEDIA_COMMAND_FEATURES = {
     "play": MediaPlayerEntityFeature.PLAY,
     "pause": MediaPlayerEntityFeature.PAUSE,
     "stop": MediaPlayerEntityFeature.STOP,
+    "next": MediaPlayerEntityFeature.NEXT_TRACK,
+    "previous": MediaPlayerEntityFeature.PREVIOUS_TRACK,
+}
+
+# media_player services for the companion app media commands
+MEDIA_COMMAND_SERVICES = {
+    "play": "media_play",
+    "pause": "media_pause",
+    "stop": "media_stop",
+    "next": "media_next_track",
+    "previous": "media_previous_track",
 }
 
 
@@ -328,7 +341,7 @@ async def send_music_command(hass: HomeAssistant, entry: ConfigEntry, kind: str,
             "media_package_name": get_music_app(entry),
         })
     else:
-        await call_media_player(hass, target_id, "media_player", f"media_{media_command}")
+        await call_media_player(hass, target_id, "media_player", MEDIA_COMMAND_SERVICES[media_command])
 
 
 async def control_music(
@@ -506,6 +519,26 @@ async def stop_music(
     await control_music(hass, entry, user_input, "stop")
 
 
+async def next_music_track(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    user_input: conversation.ConversationInput,
+    parameters: list,
+) -> None:
+    """Skip to the next track."""
+    await control_music(hass, entry, user_input, "next")
+
+
+async def previous_music_track(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    user_input: conversation.ConversationInput,
+    parameters: list,
+) -> None:
+    """Go back to the previous track."""
+    await control_music(hass, entry, user_input, "previous")
+
+
 async def play_music_track(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -677,6 +710,8 @@ ACTIONS: dict[str, ActionHandler] = {
     ACTION_PLAY_MUSIC: play_music,
     ACTION_PAUSE_MUSIC: pause_music,
     ACTION_STOP_MUSIC: stop_music,
+    ACTION_NEXT_MUSIC_TRACK: next_music_track,
+    ACTION_PREVIOUS_MUSIC_TRACK: previous_music_track,
     ACTION_PLAY_MUSIC_TRACK: play_music_track,
     ACTION_INCREASE_VOLUME: increase_volume,
     ACTION_DECREASE_VOLUME: decrease_volume,

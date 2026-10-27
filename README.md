@@ -47,6 +47,7 @@ The Cora server can return an `action` with `actionParameters` next to `speakRes
 | `OPEN_WEB` | URL |
 | `PLAY_MUSIC` | playlist (optional) |
 | `PAUSE_MUSIC` / `STOP_MUSIC` | – |
+| `NEXT_MUSIC_TRACK` / `PREVIOUS_MUSIC_TRACK` | – |
 | `PLAY_MUSIC_TRACK` | track, artist (optional) |
 | `SET_VOLUME` | 0–100 |
 | `INCREASE_VOLUME` / `DECREASE_VOLUME` | step in percent (optional, default 10) |
