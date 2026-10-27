@@ -18,6 +18,24 @@ from .auth import CoraAuth, call_post_request
 
 _LOGGER = logging.getLogger(__name__)
 
+# Spoken when the endpoint can not be reached or sends an invalid response, by language
+ERROR_MESSAGES = {
+    "en": {
+        "cannot_connect": "Sorry, unable to connect to endpoint. Check settings and try again.",
+        "invalid_response": "Sorry, I didn't get a response from endpoint. Check your logs for possible issues.",
+    },
+    "de": {
+        "cannot_connect": "Entschuldigung, ich kann den Server nicht erreichen. Prüfe die Einstellungen und versuche es erneut.",
+        "invalid_response": "Entschuldigung, ich habe keine gültige Antwort vom Server bekommen. Prüfe die Logs auf mögliche Fehler.",
+    },
+}
+
+
+def error_message(language: str | None, key: str) -> str:
+    """Return the error message in the language of the request, English if it is not translated."""
+    messages = ERROR_MESSAGES.get((language or "en").split("-")[0].lower(), ERROR_MESSAGES["en"])
+    return messages[key]
+
 
 class CoraAgent(conversation.AbstractConversationAgent):
     """Cora conversation agent."""
@@ -75,7 +93,7 @@ class CoraAgent(conversation.AbstractConversationAgent):
             _LOGGER.warning("Unable to connect to endpoint " + url)
             result = {
                 "finish_reason": "error",
-                "speakResponse": "Sorry, unable to connect to endpoint. Check settings and try again."
+                "speakResponse": error_message(user_input.language, "cannot_connect")
             }
             self.auth.reset_token()
             self.auth.set_connected(False)
@@ -84,7 +102,7 @@ class CoraAgent(conversation.AbstractConversationAgent):
             _LOGGER.warning(f"Result: {result_req}")
             result = {
                 "finish_reason": "error",
-                "speakResponse": "Sorry, I didn't get a response from endpoint. Check your logs for possible issues."
+                "speakResponse": error_message(user_input.language, "invalid_response")
             }
             self.auth.reset_token()
             self.auth.set_connected(False)

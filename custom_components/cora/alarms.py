@@ -227,15 +227,27 @@ class AlarmManager:
         from .actions import call_media_player, get_media_player  # pylint: disable=import-outside-toplevel
 
         _LOGGER.info(f"Alarm {alarm.time_str} ringing on device {alarm.device_id}")
+        # A label is spoken once before the alarm sound starts
+        speak_label = bool(alarm.label)
         try:
             async with asyncio.timeout(ALARM_RING_TIMEOUT.total_seconds()):
                 while True:
                     if satellite := self._get_satellite(alarm.device_id):
+                        if speak_label:
+                            data = {"message": alarm.label}
+                            speak_label = False
+                        else:
+                            # Home Assistant turns the relative path into a URL the satellite can fetch
+                            data = {
+                                "message": ALARM_DEFAULT_MESSAGE,
+                                "media_id": f"{SOUNDS_URL_PATH}/{ALARM_SOUND_FILE}",
+                                "preannounce": False,
+                            }
                         try:
                             await self.hass.services.async_call(
                                 "assist_satellite",
                                 "announce",
-                                {"entity_id": satellite, "message": alarm.label or ALARM_DEFAULT_MESSAGE},
+                                {"entity_id": satellite, **data},
                                 blocking=True,
                             )
                         except Exception as e:  # pylint: disable=broad-except
