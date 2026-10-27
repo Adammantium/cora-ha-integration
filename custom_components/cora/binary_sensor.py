@@ -21,7 +21,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the connection sensor."""
-    async_add_entities([CoraConnectionSensor(entry, entry.runtime_data)])
+    async_add_entities([CoraConnectionSensor(entry, entry.runtime_data.auth)])
 
 
 class CoraConnectionSensor(BinarySensorEntity):

@@ -43,8 +43,10 @@ The Cora server can return an `action` with `actionParameters` next to `speakRes
 |---|---|
 | `SET_TIMER` | seconds |
 | `SHOW_TIMER` | – |
-| `REMOVE_TIMER` | – (dismisses a ringing timer) |
-| `STOP` | – (dismisses ringing timers and stops running music) |
+| `REMOVE_TIMER` | – (dismisses a ringing timer, cancels the timers of a satellite) |
+| `SET_ALARM` | `"HH:MM"`, days (optional, e.g. `"MON,TUE,WED,THU,FRI"`), label (optional) |
+| `REMOVE_ALARM` | `"HH:MM"` (optional, without it the next alarm is removed) |
+| `STOP` | – (stops a ringing alarm, otherwise dismisses ringing timers and stops running music) |
 | `OPEN_WEB` | URL |
 | `PLAY_MUSIC` | playlist (optional) |
 | `PAUSE_MUSIC` / `STOP_MUSIC` | – |
@@ -56,3 +58,48 @@ The Cora server can return an `action` with `actionParameters` next to `speakRes
 Phone actions need the Android companion app with **notification access** and
 **display over other apps**. Enable the **Music volume** and **Media session** sensors
 in the companion app for volume control and playback detection.
+
+## Timers
+
+Satellites that support Home Assistant timers, like the Voice PE, get a native timer
+that rings on the satellite and is stopped there with "stop". All other requests start
+a timer in the clock app of the phone, or the fallback phone.
+
+## Alarms
+
+Examples for `SET_ALARM`:
+
+| Parameters | Alarm |
+|---|---|
+| `["07:30"]` | once, at the next 07:30 |
+| `["07:30", "MON,TUE,WED,THU,FRI"]` | every weekday at 07:30 |
+| `["07:30", "", "Arbeit"]` | once, with the label "Arbeit" |
+
+Requests from a phone set the alarm in its clock app, as do requests without a device
+when a fallback phone is configured. For all other devices Home Assistant keeps the alarm
+itself. It survives restarts, but an alarm missed while Home Assistant was down does not
+ring late. When the alarm rings, a satellite announces the label (or "Wecker"), otherwise
+a media player on the device, in its room or the fallback player plays an alarm sound.
+This repeats until you say "stop" or 10 minutes have passed.
+
+The **Next alarm** sensor of the Cora device shows when the next alarm rings and
+lists all alarms in its attributes.
+
+Ringing alarms fire the events `cora_alarm_ringing` and `cora_alarm_stopped` with
+`alarm_id`, `time`, `label`, `device_id` and `area_id`, so you can build automations on them:
+
+```yaml
+automation:
+  - alias: Lights on when the alarm rings
+    triggers:
+      - trigger: event
+        event_type: cora_alarm_ringing
+        event_data:
+          area_id: bedroom
+    actions:
+      - action: light.turn_on
+        target:
+          area_id: bedroom
+        data:
+          brightness_pct: 60
+```

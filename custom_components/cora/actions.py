@@ -3,16 +3,20 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 import logging
+import re
 from urllib.parse import quote
 
 from homeassistant.components import conversation
+from homeassistant.components.intent import async_device_supports_timers
+from homeassistant.components.intent.const import TIMER_DATA
 from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_SUPPORTED_FEATURES, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er, intent
 from homeassistant.util import slugify
 
+from .alarms import WEEKDAYS
 from .const import (
     ACTION_DECREASE_VOLUME,
     ACTION_INCREASE_VOLUME,
@@ -22,7 +26,9 @@ from .const import (
     ACTION_PLAY_MUSIC,
     ACTION_PLAY_MUSIC_TRACK,
     ACTION_PREVIOUS_MUSIC_TRACK,
+    ACTION_REMOVE_ALARM,
     ACTION_REMOVE_TIMER,
+    ACTION_SET_ALARM,
     ACTION_SET_TIMER,
     ACTION_SET_VOLUME,
     ACTION_SHOW_TIMER,
@@ -33,6 +39,7 @@ from .const import (
     CONF_MUSIC_APP,
     CONF_NOTIFY_SERVICE,
     DEFAULT_MUSIC_APP,
+    DOMAIN,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -143,6 +150,22 @@ async def set_timer(
         _LOGGER.warning(f"Invalid SET_TIMER parameters: {parameters}")
         return
 
+    # Satellites like the Voice PE ring native Home Assistant timers themselves
+    if user_input.device_id and async_device_supports_timers(hass, user_input.device_id):
+        _LOGGER.info(f"Starting a native timer of {seconds} seconds on device {user_input.device_id}")
+        try:
+            await intent.async_handle(
+                hass,
+                DOMAIN,
+                intent.INTENT_START_TIMER,
+                {"seconds": {"value": seconds}},
+                language=user_input.language,
+                device_id=user_input.device_id,
+            )
+        except intent.IntentError as e:
+            _LOGGER.warning(f"Failed to start a native timer: {e}")
+        return
+
     await start_activity(hass, entry, user_input, {
         "intent_action": "android.intent.action.SET_TIMER",
         "intent_extras": f"android.intent.extra.alarm.LENGTH:{seconds},android.intent.extra.alarm.SKIP_UI:true",
@@ -167,14 +190,137 @@ async def remove_timer(
     user_input: conversation.ConversationInput,
     parameters: list,
 ) -> None:
-    """Dismiss the timer that is currently ringing.
+    """Cancel the native timers of a satellite or dismiss the timer ringing on the phone.
 
     Android has no public intent to delete a running timer, DISMISS_TIMER
     only dismisses expired timers.
     """
+    if user_input.device_id and async_device_supports_timers(hass, user_input.device_id):
+        # HassCancelAllTimers without an area cancels the timers of all devices,
+        # so only the timers started on this device are cancelled here
+        timer_manager = hass.data[TIMER_DATA]
+        for timer in list(timer_manager.timers.values()):
+            if timer.device_id == user_input.device_id and not timer.conversation_command:
+                timer_manager.cancel_timer(timer.id)
+        return
+
     await start_activity(hass, entry, user_input, {
         "intent_action": "android.intent.action.DISMISS_TIMER",
     })
+
+
+ALARM_TIME_PATTERN = re.compile(r"^(\d{1,2}):(\d{2})$")
+
+
+def parse_alarm_time(value: object) -> tuple[int, int] | None:
+    """Parse "HH:MM" into (hour, minute)."""
+    match = ALARM_TIME_PATTERN.match(str(value).strip())
+    if not match:
+        return None
+    hour, minute = int(match.group(1)), int(match.group(2))
+    if hour > 23 or minute > 59:
+        return None
+    return hour, minute
+
+
+def parse_alarm_days(value: object) -> list[int] | None:
+    """Parse "MON,TUE,..." into weekdays with 0 = Monday, empty for a one-time alarm."""
+    days = []
+    for day in str(value or "").upper().split(","):
+        day = day.strip()
+        if not day:
+            continue
+        if day not in WEEKDAYS:
+            return None
+        days.append(WEEKDAYS.index(day))
+    return sorted(set(days))
+
+
+def get_alarm_phone(hass: HomeAssistant, entry: ConfigEntry, device_id: str | None) -> str | None:
+    """Return the notify service if the alarm belongs in the clock app of a phone.
+
+    That is a phone that sent the request, or the fallback phone if there is no device.
+    """
+    if service := get_device_notify_service(hass, device_id):
+        return service
+    if not device_id:
+        return get_fallback_notify_service(hass, entry)
+    return None
+
+
+async def set_alarm(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    user_input: conversation.ConversationInput,
+    parameters: list,
+) -> None:
+    """Set an alarm, parameters are ["HH:MM", days (optional, "MON,TUE,..."), label (optional)].
+
+    Phones get the alarm in the clock app, other devices ring it through Home Assistant.
+    """
+    alarm_time = parse_alarm_time(parameters[0]) if parameters else None
+    days = parse_alarm_days(parameters[1] if len(parameters) > 1 else "")
+    if alarm_time is None or days is None:
+        _LOGGER.warning(f"Invalid SET_ALARM parameters: {parameters}")
+        return
+    hour, minute = alarm_time
+    label = str(parameters[2]).strip() if len(parameters) > 2 else ""
+
+    if service := get_alarm_phone(hass, entry, user_input.device_id):
+        # https://developer.android.com/reference/android/provider/AlarmClock#ACTION_SET_ALARM
+        extras = [
+            f"android.intent.extra.alarm.HOUR:{hour}",
+            f"android.intent.extra.alarm.MINUTES:{minute}",
+            "android.intent.extra.alarm.SKIP_UI:true",
+        ]
+        if label:
+            extras.append(string_extra("android.intent.extra.alarm.MESSAGE", label))
+        if days:
+            # Calendar weekdays, 1 = Sunday ... 7 = Saturday
+            calendar_days = ";".join(str((day + 1) % 7 + 1) for day in days)
+            extras.append(f"android.intent.extra.alarm.DAYS:{calendar_days}:ArrayList<Integer>")
+        await send_phone_command(hass, service, "command_activity", {
+            "intent_action": "android.intent.action.SET_ALARM",
+            "intent_extras": ",".join(extras),
+        })
+        return
+
+    await entry.runtime_data.alarms.async_add(hour, minute, days, label, user_input.device_id)
+
+
+async def remove_alarm(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    user_input: conversation.ConversationInput,
+    parameters: list,
+) -> None:
+    """Remove the alarms at a time, parameters are ["HH:MM" (optional)], without a time the next alarm."""
+    alarm_time = None
+    if parameters and str(parameters[0]).strip():
+        alarm_time = parse_alarm_time(parameters[0])
+        if alarm_time is None:
+            _LOGGER.warning(f"Invalid REMOVE_ALARM parameters: {parameters}")
+            return
+
+    if service := get_alarm_phone(hass, entry, user_input.device_id):
+        # https://developer.android.com/reference/android/provider/AlarmClock#ACTION_DISMISS_ALARM
+        if alarm_time is None:
+            extras = ["android.intent.extra.alarm.SEARCH_MODE:android.next"]
+        else:
+            extras = [
+                "android.intent.extra.alarm.SEARCH_MODE:android.time",
+                f"android.intent.extra.alarm.HOUR:{alarm_time[0]}",
+                f"android.intent.extra.alarm.MINUTES:{alarm_time[1]}",
+            ]
+        await send_phone_command(hass, service, "command_activity", {
+            "intent_action": "android.intent.action.DISMISS_ALARM",
+            "intent_extras": ",".join(extras),
+        })
+        return
+
+    hour, minute = alarm_time if alarm_time else (None, None)
+    if not await entry.runtime_data.alarms.async_remove(user_input.device_id, hour, minute):
+        _LOGGER.info(f"No alarm to remove for device {user_input.device_id} at {parameters}")
 
 
 async def open_web(
@@ -718,11 +864,15 @@ async def stop(
     user_input: conversation.ConversationInput,
     parameters: list,
 ) -> None:
-    """Stop whatever is going on: expired timers and running music.
+    """Stop whatever is going on: a ringing alarm, otherwise expired timers and running music.
 
-    Ringing alarms are left alone, DISMISS_ALARM would skip the next alarm
-    if none is ringing and the companion app can not tell if one is.
+    Only alarms managed by Home Assistant are stopped. Alarms in the phone's clock app
+    are left alone, DISMISS_ALARM would skip the next alarm if none is ringing
+    and the companion app can not tell if one is.
     """
+    if entry.runtime_data.alarms.async_stop_ringing(user_input.device_id):
+        return
+
     # Expired timers on the phone, DISMISS_TIMER without a timer only affects expired ones
     if get_notify_service(hass, entry, user_input.device_id):
         await start_activity(hass, entry, user_input, {
@@ -754,6 +904,8 @@ ACTIONS: dict[str, ActionHandler] = {
     ACTION_SET_TIMER: set_timer,
     ACTION_SHOW_TIMER: show_timer,
     ACTION_REMOVE_TIMER: remove_timer,
+    ACTION_SET_ALARM: set_alarm,
+    ACTION_REMOVE_ALARM: remove_alarm,
     ACTION_OPEN_WEB: open_web,
     ACTION_PLAY_MUSIC: play_music,
     ACTION_PAUSE_MUSIC: pause_music,

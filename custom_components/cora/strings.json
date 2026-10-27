@@ -44,6 +44,11 @@
       "connection": {
         "name": "Connection"
       }
+    },
+    "sensor": {
+      "next_alarm": {
+        "name": "Next alarm"
+      }
     }
   }
 }

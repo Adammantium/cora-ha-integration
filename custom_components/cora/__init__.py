@@ -4,22 +4,28 @@
 # https://github.com/roblandry/nodered_conversation
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 import logging
+from pathlib import Path
 
 from homeassistant.components import conversation
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.typing import ConfigType
 
+from .alarms import AlarmManager
 from .auth import CoraAuth
 from .const import (
     CONF_URL,
     CONF_USER,
     CONF_PASS,
     DOMAIN,
+    SOUNDS_URL_PATH,
     TOKEN_REFRESH_INTERVAL,
 )
 from .agent import CoraAgent
@@ -28,7 +34,23 @@ _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
-PLATFORMS = [Platform.BINARY_SENSOR]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
+
+
+@dataclass
+class CoraData:
+    """Runtime data of a config entry."""
+
+    auth: CoraAuth
+    alarms: AlarmManager
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Serve the bundled sounds, media players fetch the alarm sound from there."""
+    await hass.http.async_register_static_paths([
+        StaticPathConfig(SOUNDS_URL_PATH, str(Path(__file__).parent / "sounds"), False)
+    ])
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -40,7 +62,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     config = {**entry.data, **entry.options}
 
     auth = CoraAuth(config[CONF_URL], config.get(CONF_USER, ""), config.get(CONF_PASS, ""))
-    entry.runtime_data = auth
+    alarms = AlarmManager(hass, entry)
+    await alarms.async_load()
+    entry.runtime_data = CoraData(auth, alarms)
     conversation.async_set_agent(hass, entry, CoraAgent(hass, entry, auth))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -64,4 +88,5 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     conversation.async_unset_agent(hass, entry)
+    entry.runtime_data.alarms.async_unload()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
