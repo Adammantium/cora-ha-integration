@@ -8,9 +8,10 @@ from datetime import datetime, time, timedelta
 import logging
 import uuid
 
+from homeassistant.components.assist_satellite import AssistSatelliteEntityFeature
 from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNAVAILABLE
+from homeassistant.const import ATTR_SUPPORTED_FEATURES, STATE_UNAVAILABLE
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.event import async_track_point_in_time
@@ -22,10 +23,14 @@ from .const import (
     ALARM_DEFAULT_MESSAGE,
     ALARM_REPEAT_PAUSE,
     ALARM_RING_TIMEOUT,
-    ALARM_SOUND_FILE,
+    DEFAULT_ALARM_SOUND,
+    DEFAULT_TIMER_SOUND,
     DOMAIN,
     EVENT_ALARM_RINGING,
     EVENT_ALARM_STOPPED,
+    EVENT_TIMER_RINGING,
+    EVENT_TIMER_STOPPED,
+    SOUNDS,
     SOUNDS_URL_PATH,
 )
 
@@ -49,6 +54,8 @@ class Alarm:
     enabled: bool = True
     # When a one-time alarm rings, fixed when it is set so a missed one can be detected
     at: str | None = None
+    # "alarm", or "timer" for finished timers that Cora rings, those are never stored
+    kind: str = "alarm"
 
     @property
     def time_str(self) -> str:
@@ -94,6 +101,9 @@ class AlarmManager:
         # alarm id -> (alarm, ringing task)
         self._ringing: dict[str, tuple[Alarm, asyncio.Task]] = {}
         self._listeners: list[Callable[[], None]] = []
+        # Sound keys of SOUNDS, set by the sound select entities
+        self.alarm_sound = DEFAULT_ALARM_SOUND
+        self.timer_sound = DEFAULT_TIMER_SOUND
 
     def add_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
         """Call listener when the alarms change, returns a function to remove it."""
@@ -171,13 +181,33 @@ class AlarmManager:
             self.alarms.pop(alarm_id)
             await self._async_save()
         self._notify()
+        self._start_ringing(alarm)
 
+    @callback
+    def async_ring_timer(self, device_id: str | None, name: str | None) -> None:
+        """Ring a finished timer on a satellite that has no timer sound of its own."""
+        now = dt_util.now()
+        self._start_ringing(Alarm(
+            id=uuid.uuid4().hex,
+            hour=now.hour,
+            minute=now.minute,
+            label=name or "",
+            device_id=device_id,
+            kind="timer",
+        ))
+
+    @callback
+    def _start_ringing(self, alarm: Alarm) -> None:
+        """Ring an alarm or a finished timer until stopped or timed out."""
         # A new alarm on the same device replaces the one that is still ringing
         for other, other_task in list(self._ringing.values()):
             if other.device_id == alarm.device_id:
                 other_task.cancel()
 
-        self.hass.bus.async_fire(EVENT_ALARM_RINGING, self._event_data(alarm))
+        self.hass.bus.async_fire(
+            EVENT_TIMER_RINGING if alarm.kind == "timer" else EVENT_ALARM_RINGING,
+            self._event_data(alarm),
+        )
         task = self.entry.async_create_background_task(
             self.hass, self._async_ring(alarm), f"cora_alarm_{alarm.id}"
         )
@@ -202,24 +232,33 @@ class AlarmManager:
         return device.area_id if device else None
 
     def _get_satellite(self, device_id: str | None) -> str | None:
-        """Return the assist_satellite entity of the device, if it has one."""
+        """Return the assist_satellite entity of the device, if it has one that can announce."""
         if not device_id:
             return None
         for entity in er.async_entries_for_device(er.async_get(self.hass), device_id):
             if entity.domain != "assist_satellite" or entity.disabled:
                 continue
             state = self.hass.states.get(entity.entity_id)
-            if state is not None and state.state != STATE_UNAVAILABLE:
+            if (
+                state is not None
+                and state.state != STATE_UNAVAILABLE
+                and state.attributes.get(ATTR_SUPPORTED_FEATURES, 0) & AssistSatelliteEntityFeature.ANNOUNCE
+            ):
                 return entity.entity_id
         return None
 
-    def _sound_url(self) -> str | None:
+    def _sound_path(self, alarm: Alarm) -> str:
+        """Return the URL path of the sound selected for alarms or timers."""
+        sound = self.timer_sound if alarm.kind == "timer" else self.alarm_sound
+        return f"{SOUNDS_URL_PATH}/{SOUNDS.get(sound, SOUNDS[DEFAULT_ALARM_SOUND])}"
+
+    def _sound_url(self, alarm: Alarm) -> str | None:
         try:
             base = get_url(self.hass, prefer_external=False)
         except NoURLAvailableError:
             _LOGGER.warning("No Home Assistant URL configured, can not play the alarm sound")
             return None
-        return f"{base}{SOUNDS_URL_PATH}/{ALARM_SOUND_FILE}"
+        return f"{base}{self._sound_path(alarm)}"
 
     async def _async_ring(self, alarm: Alarm) -> None:
         """Ring on the satellite of the device or a media player until stopped or timed out."""
@@ -240,7 +279,7 @@ class AlarmManager:
                             # Home Assistant turns the relative path into a URL the satellite can fetch
                             data = {
                                 "message": ALARM_DEFAULT_MESSAGE,
-                                "media_id": f"{SOUNDS_URL_PATH}/{ALARM_SOUND_FILE}",
+                                "media_id": self._sound_path(alarm),
                                 "preannounce": False,
                             }
                         try:
@@ -254,7 +293,7 @@ class AlarmManager:
                             _LOGGER.warning(f"Failed to announce the alarm on {satellite}: {e}")
                     elif (player := get_media_player(
                         self.hass, self.entry, alarm.device_id, MediaPlayerEntityFeature.PLAY_MEDIA
-                    )) and (url := self._sound_url()):
+                    )) and (url := self._sound_url(alarm)):
                         await call_media_player(self.hass, player, "media_player", "play_media", {
                             "media_content_id": url,
                             "media_content_type": "music",
@@ -268,7 +307,10 @@ class AlarmManager:
             _LOGGER.info(f"Alarm {alarm.time_str} stopped after {ALARM_RING_TIMEOUT}")
         finally:
             self._ringing.pop(alarm.id, None)
-            self.hass.bus.async_fire(EVENT_ALARM_STOPPED, self._event_data(alarm))
+            self.hass.bus.async_fire(
+                EVENT_TIMER_STOPPED if alarm.kind == "timer" else EVENT_ALARM_STOPPED,
+                self._event_data(alarm),
+            )
             self._notify()
 
     @callback

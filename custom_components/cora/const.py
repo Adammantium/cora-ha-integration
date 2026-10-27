@@ -44,7 +44,21 @@ ALARM_DEFAULT_MESSAGE = "Wecker"
 
 # Bundled sounds are served under this URL path
 SOUNDS_URL_PATH = "/cora/sounds"
-ALARM_SOUND_FILE = "alarm.mp3"
+
+# Selectable sounds, key -> file in the sounds folder, names are in the translations
+SOUNDS = {
+    "classic": "classic.mp3",
+    "pulse": "pulse.mp3",
+    "sunrise": "sunrise.mp3",
+    "lighthouse": "lighthouse.mp3",
+    "marimba_morning": "marimba_morning.mp3",
+    "songbird": "songbird.mp3",
+    "red_alert": "red_alert.mp3",
+}
+DEFAULT_ALARM_SOUND = "pulse"
+DEFAULT_TIMER_SOUND = "classic"
 
 EVENT_ALARM_RINGING = "cora_alarm_ringing"
 EVENT_ALARM_STOPPED = "cora_alarm_stopped"
+EVENT_TIMER_RINGING = "cora_timer_ringing"
+EVENT_TIMER_STOPPED = "cora_timer_stopped"

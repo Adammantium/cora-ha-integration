@@ -48,6 +48,35 @@
     "sensor": {
       "next_alarm": {
         "name": "Next alarm"
+      },
+      "next_timer": {
+        "name": "Next timer"
+      }
+    },
+    "select": {
+      "alarm_sound": {
+        "name": "Alarm sound",
+        "state": {
+          "classic": "Classic",
+          "pulse": "Pulse",
+          "sunrise": "Sunrise",
+          "lighthouse": "Lighthouse",
+          "marimba_morning": "Marimba Morning",
+          "songbird": "Songbird",
+          "red_alert": "Red Alert"
+        }
+      },
+      "timer_sound": {
+        "name": "Timer sound",
+        "state": {
+          "classic": "Classic",
+          "pulse": "Pulse",
+          "sunrise": "Sunrise",
+          "lighthouse": "Lighthouse",
+          "marimba_morning": "Marimba Morning",
+          "songbird": "Songbird",
+          "red_alert": "Red Alert"
+        }
       }
     }
   }

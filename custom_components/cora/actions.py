@@ -164,12 +164,32 @@ async def set_timer(
             )
         except intent.IntentError as e:
             _LOGGER.warning(f"Failed to start a native timer: {e}")
+            return
+        # ESPHome satellites like the Voice PE ring by themselves, others like Wyoming
+        # satellites only with extra setup, so Cora rings the timer for them
+        if not is_esphome_device(hass, user_input.device_id):
+            entry.runtime_data.timers.async_watch_native_timer(user_input.device_id)
         return
 
+    if get_notify_service(hass, entry, user_input.device_id):
+        # The clock app does not report its timers, remember it for the next timer sensor
+        entry.runtime_data.timers.async_add_phone_timer(user_input.device_id, seconds)
     await start_activity(hass, entry, user_input, {
         "intent_action": "android.intent.action.SET_TIMER",
         "intent_extras": f"android.intent.extra.alarm.LENGTH:{seconds},android.intent.extra.alarm.SKIP_UI:true",
     })
+
+
+def is_esphome_device(hass: HomeAssistant, device_id: str) -> bool:
+    """Check if a device belongs to the ESPHome integration."""
+    device = dr.async_get(hass).async_get(device_id)
+    if device is None:
+        return False
+    return any(
+        (config_entry := hass.config_entries.async_get_entry(entry_id)) is not None
+        and config_entry.domain == "esphome"
+        for entry_id in device.config_entries
+    )
 
 
 async def show_timer(

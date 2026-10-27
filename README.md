@@ -61,9 +61,15 @@ in the companion app for volume control and playback detection.
 
 ## Timers
 
-Satellites that support Home Assistant timers, like the Voice PE, get a native timer
-that rings on the satellite and is stopped there with "stop". All other requests start
-a timer in the clock app of the phone, or the fallback phone.
+Satellites that support Home Assistant timers get a native timer. ESPHome satellites
+like the Voice PE ring it themselves and stop it with "stop". Other satellites, like
+Wyoming satellites, have no timer sound of their own, so Cora rings the finished timer
+like an alarm until you say "stop" (event `cora_timer_ringing` / `cora_timer_stopped`).
+All other requests start a timer in the clock app of the phone, or the fallback phone.
+
+The **Next timer** sensor of the Cora device shows when the next timer ends and lists
+all timers in its attributes. Timers in the phone's clock app are only known if Cora
+started them and are forgotten after a restart of Home Assistant.
 
 ## Alarms
 
@@ -81,6 +87,22 @@ itself. It survives restarts, but an alarm missed while Home Assistant was down 
 ring late. When the alarm rings, a satellite announces the label (or "Wecker"), otherwise
 a media player on the device, in its room or the fallback player plays an alarm sound.
 This repeats until you say "stop" or 10 minutes have passed.
+
+### Sounds
+
+The **Alarm sound** and **Timer sound** dropdowns of the Cora device choose what rings:
+
+| Sound | Character |
+|---|---|
+| Classic | the original timer sound (default for timers) |
+| Pulse | steady beeping, clearly audible but not harsh (default for alarms) |
+| Sunrise | rising chime arpeggio |
+| Lighthouse | slow two tone bell |
+| Marimba Morning | cheerful marimba phrase |
+| Songbird | bursts of bird like chirps |
+| Red Alert | fast, urgent beeper for deep sleepers |
+
+The sounds are generated with `tools/generate_sounds.py`.
 
 The **Next alarm** sensor of the Cora device shows when the next alarm rings and
 lists all alarms in its attributes.

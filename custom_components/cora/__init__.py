@@ -20,6 +20,7 @@ from homeassistant.helpers.typing import ConfigType
 
 from .alarms import AlarmManager
 from .auth import CoraAuth
+from .timers import TimerTracker
 from .const import (
     CONF_URL,
     CONF_USER,
@@ -34,7 +35,7 @@ _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
-PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.SELECT, Platform.SENSOR]
 
 
 @dataclass
@@ -43,6 +44,7 @@ class CoraData:
 
     auth: CoraAuth
     alarms: AlarmManager
+    timers: TimerTracker
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -64,7 +66,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     auth = CoraAuth(config[CONF_URL], config.get(CONF_USER, ""), config.get(CONF_PASS, ""))
     alarms = AlarmManager(hass, entry)
     await alarms.async_load()
-    entry.runtime_data = CoraData(auth, alarms)
+    entry.runtime_data = CoraData(auth, alarms, TimerTracker(hass, alarms.async_ring_timer))
     conversation.async_set_agent(hass, entry, CoraAgent(hass, entry, auth))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -89,4 +91,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     conversation.async_unset_agent(hass, entry)
     entry.runtime_data.alarms.async_unload()
+    entry.runtime_data.timers.async_unload()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
