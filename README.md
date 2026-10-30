@@ -35,6 +35,11 @@ Copy `custom_components/cora` to `/config/custom_components/cora` and restart Ho
 Select **Cora** as the conversation agent of your voice assistant under
 **Settings → Voice assistants**.
 
+## Follow-up questions
+
+If the response contains `"requiresResponse": true`, the voice assistant keeps listening
+for the answer without the wake word. The answer is sent with the same `conversation_id`.
+
 ## Actions
 
 The Cora server can return an `action` with `actionParameters` next to `speakResponse`:

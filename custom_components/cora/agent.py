@@ -12,6 +12,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import MATCH_ALL
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar, device_registry as dr, intent
+from homeassistant.util.ulid import ulid_now
 
 from .actions import async_handle_action
 from .auth import CoraAuth, call_post_request
@@ -76,7 +77,10 @@ class CoraAgent(conversation.AbstractConversationAgent):
 
         device_name, room = self.get_device_info(user_input.device_id)
 
-        content = {'message': user_input.text, 'speakerIdent': "", "sessionToken": self.auth.token, 'conversation_id': user_input.conversation_id, 'device_id': user_input.device_id, 'device_name': device_name, 'room': room, 'language': user_input.language, 'agent_id': user_input.agent_id, 'extra_system_prompt': user_input.extra_system_prompt}
+        # Follow-up questions are sent with the same id, so the endpoint can match the answer to the question
+        conversation_id = user_input.conversation_id or ulid_now()
+
+        content = {'message': user_input.text, 'speakerIdent': "", "sessionToken": self.auth.token, 'conversation_id': conversation_id, 'device_id': user_input.device_id, 'device_name': device_name, 'room': room, 'language': user_input.language, 'agent_id': user_input.agent_id, 'extra_system_prompt': user_input.extra_system_prompt}
 
         _LOGGER.info("Content sent to endpoint %s", content)
         url = self.auth.url + "/SpeechServlet"
@@ -114,15 +118,13 @@ class CoraAgent(conversation.AbstractConversationAgent):
         # https://github.com/home-assistant/core/blob/220aaf93c6b0d201bb4baa59d96ff9d9c8a66279/homeassistant/helpers/intent.py#L1380
         intent_response = intent.IntentResponse(language=user_input.language)
 
-        shouldContinue = False
-        if "speakResponse" in result and result["speakResponse"] != "":
-            intent_response.async_set_speech(result["speakResponse"])
-            shouldContinue = False # result["continue_conversation"]
-        else:
-            intent_response.async_set_speech(result["speakResponse"])
+        intent_response.async_set_speech(result.get("speakResponse") or "")
 
-        _LOGGER.debug(f"shouldContinue {shouldContinue}")
+        # The endpoint asks a question, listen for the answer without the wake word
+        should_continue = bool(result.get("requiresResponse"))
+
+        _LOGGER.debug(f"shouldContinue {should_continue}")
         # https://github.com/home-assistant/core/blob/eb3cb0e0c7835ca10cdbb225d85f5e22d512e290/homeassistant/components/conversation/models.py#L60
         return conversation.ConversationResult(
-            response=intent_response, conversation_id=user_input.conversation_id, continue_conversation=shouldContinue,
+            response=intent_response, conversation_id=conversation_id, continue_conversation=should_continue,
         )
